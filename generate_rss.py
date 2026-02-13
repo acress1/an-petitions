@@ -1,61 +1,76 @@
 import requests
+import csv
+import io
 from feedgen.feed import FeedGenerator
 from datetime import datetime
 import os
 
-# URL de secours si l'API data.gouv fait des siennes
+# L'URL qui renvoie le CSV
 DATA_URL = "https://www.data.gouv.fr/api/1/datasets/r/c94c9dfe-23eb-45aa-acd1-7438c4e977db"
 
 def create_feed():
     fg = FeedGenerator()
     fg.title('Pétitions - Assemblée Nationale')
     fg.link(href='https://petitions.assemblee-nationale.fr', rel='alternate')
-    fg.description('Flux mis à jour via GitHub Actions')
+    fg.description('Flux mis à jour depuis l\'export CSV de data.gouv.fr')
     fg.language('fr')
 
-    # On ajoute un User-Agent pour éviter d'être bloqué
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
 
     try:
-        print(f"Tentative de récupération des données depuis {DATA_URL}...")
+        print(f"Récupération du CSV...")
         response = requests.get(DATA_URL, headers=headers, timeout=30)
-        
-        # Affiche le début de la réponse pour déboguer dans GitHub Actions
-        print(f"Statut de la réponse : {response.status_code}")
-        
         response.raise_for_status()
         
-        petitions = response.json()
-        print(f"{len(petitions)} pétitions trouvées.")
+        # On décode le contenu en texte pour le lecteur CSV
+        content = response.content.decode('utf-8')
+        f = io.StringIO(content)
         
-        for p in petitions:
-            if not isinstance(p, dict): continue
+        # Le CSV utilise des points-virgules comme délimiteur
+        reader = csv.DictReader(f, delimiter=';')
+        
+        count = 0
+        for row in reader:
             fe = fg.add_entry()
-            p_id = str(p.get('id'))
-            nb_signatures = p.get('nb_votes', 0)
-            titre = p.get('titre', 'Sans titre')
+            
+            # On utilise les noms de colonnes vus dans tes logs
+            titre = row.get('titre', 'Sans titre')
+            nb_signatures = row.get('nb_votes', '0')
+            description = row.get('description', '')
+            p_url = row.get('url', 'https://petitions.assemblee-nationale.fr')
+            p_id = row.get('identifiant') or p_url.split('/')[-1]
+            statut = row.get('statut', 'N/A')
             
             fe.title(f"[{nb_signatures} signatures] {titre}")
-            fe.link(href=f"https://petitions.assemblee-nationale.fr/initiatives/{p_id}")
+            fe.link(href=p_url)
             fe.id(p_id)
             
-            resume = p.get('resume') or p.get('description') or ""
-            fe.description(f"<b>Signatures : {nb_signatures}</b><br><br>{resume}")
+            content_html = f"<b>Statut : {statut}</b><br><b>Signatures : {nb_signatures}</b><br><br>{description}"
+            fe.description(content_html)
+
+            # Gestion de la date (colonne date_publication)
+            date_str = row.get('date_publication')
+            if date_str:
+                try:
+                    # On tente le format YYYY-MM-DD
+                    dt = datetime.strptime(date_str[:10], '%Y-%m-%d')
+                    fe.pubDate(dt.replace(tzinfo=None))
+                except:
+                    pass
+            
+            count += 1
 
         if not os.path.exists('public'):
             os.makedirs('public')
             
         fg.rss_file('public/rss.xml')
-        print("Fichier rss.xml généré avec succès.")
+        print(f"Succès : {count} pétitions ajoutées au flux RSS.")
 
     except Exception as e:
-        print(f"Erreur lors de la lecture du JSON : {e}")
-        # Optionnel : afficher le contenu de la réponse pour comprendre l'erreur
-        if 'response' in locals():
-            print(f"Contenu reçu : {response.text[:200]}...")
-        raise e # On fait échouer le job pour être prévenu
+        print(f"Erreur : {e}")
+        raise e
 
 if __name__ == "__main__":
     create_feed()
