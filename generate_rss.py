@@ -3,75 +3,59 @@ from feedgen.feed import FeedGenerator
 from datetime import datetime
 import os
 
-# Ton lien direct data.gouv.fr
+# URL de secours si l'API data.gouv fait des siennes
 DATA_URL = "https://www.data.gouv.fr/api/1/datasets/r/c94c9dfe-23eb-45aa-acd1-7438c4e977db"
 
 def create_feed():
     fg = FeedGenerator()
-    fg.title('Pétitions - Assemblée Nationale (Data.gouv)')
+    fg.title('Pétitions - Assemblée Nationale')
     fg.link(href='https://petitions.assemblee-nationale.fr', rel='alternate')
-    fg.description('Suivi des signatures via l\'API Data.gouv.fr')
+    fg.description('Flux mis à jour via GitHub Actions')
     fg.language('fr')
 
+    # On ajoute un User-Agent pour éviter d'être bloqué
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
     try:
-        response = requests.get(DATA_URL, timeout=30)
+        print(f"Tentative de récupération des données depuis {DATA_URL}...")
+        response = requests.get(DATA_URL, headers=headers, timeout=30)
+        
+        # Affiche le début de la réponse pour déboguer dans GitHub Actions
+        print(f"Statut de la réponse : {response.status_code}")
+        
         response.raise_for_status()
-        # Le fichier JSON de ton lien est une liste directe d'objets
+        
         petitions = response.json()
+        print(f"{len(petitions)} pétitions trouvées.")
         
         for p in petitions:
-            # On vérifie si c'est bien un dictionnaire (sécurité)
             if not isinstance(p, dict): continue
-
             fe = fg.add_entry()
-            
-            # Utilisation de 'nb_votes' comme tu l'as sagement remarqué
             p_id = str(p.get('id'))
             nb_signatures = p.get('nb_votes', 0)
             titre = p.get('titre', 'Sans titre')
             
-            # Titre optimisé pour Miniflux
-            fe.title(f"[{nb_signatures} sig.] {titre}")
-            
-            # URL de la pétition
-            url = f"https://petitions.assemblee-nationale.fr/initiatives/{p_id}"
-            fe.link(href=url)
+            fe.title(f"[{nb_signatures} signatures] {titre}")
+            fe.link(href=f"https://petitions.assemblee-nationale.fr/initiatives/{p_id}")
             fe.id(p_id)
-
-            # Description (Vérification des champs présents dans l'export)
-            # Note : Certains champs comme 'resume' peuvent être nommés 'description' ou 'texte'
-            resume = p.get('resume') or p.get('description') or "Pas de description."
-            statut = p.get('statut_label') or p.get('statut') or "N/A"
             
-            content = f"""
-            <p><strong>Signatures :</strong> {nb_signatures}</p>
-            <p><strong>Statut :</strong> {statut}</p>
-            <hr>
-            {resume}
-            """
-            fe.description(content)
-
-            # Date : le champ est souvent 'date_creation' dans l'export CSV/JSON
-            date_str = p.get('date_creation') or p.get('date_depot')
-            if date_str:
-                try:
-                    # Gestion du format possible '2023-10-25' ou ISO
-                    if len(date_str) == 10:
-                        dt = datetime.strptime(date_str, '%Y-%m-%d')
-                    else:
-                        dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    fe.pubDate(dt)
-                except:
-                    pass
+            resume = p.get('resume') or p.get('description') or ""
+            fe.description(f"<b>Signatures : {nb_signatures}</b><br><br>{resume}")
 
         if not os.path.exists('public'):
             os.makedirs('public')
             
         fg.rss_file('public/rss.xml')
-        print(f"Flux RSS généré : {len(petitions)} items.")
+        print("Fichier rss.xml généré avec succès.")
 
     except Exception as e:
         print(f"Erreur lors de la lecture du JSON : {e}")
+        # Optionnel : afficher le contenu de la réponse pour comprendre l'erreur
+        if 'response' in locals():
+            print(f"Contenu reçu : {response.text[:200]}...")
+        raise e # On fait échouer le job pour être prévenu
 
 if __name__ == "__main__":
     create_feed()
